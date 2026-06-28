@@ -17,9 +17,13 @@
     <nav>
       <a href="{{ url_for('index') }}">首页</a>
       <a href="{{ url_for('recommend') }}">偏好推荐</a>
-      <a href="{{ url_for('admin') }}">景点管理</a>
       {% if current_user %}
-        <a class="user-nav" href="{{ url_for('profile') }}"><span>{{ current_user.username[:1] }}</span>个人中心</a>
+        {% if current_user.role == "admin" %}
+          <a class="admin-nav" href="{{ url_for('admin') }}"><span>管</span>管理后台</a>
+        {% else %}
+          <a class="user-nav" href="{{ url_for('profile') }}"><span>{{ current_user.username[:1] }}</span>个人中心</a>
+        {% endif %}
+        <a href="{{ url_for('logout') }}">退出</a>
       {% else %}
         <a href="{{ url_for('login') }}">登录</a>
       {% endif %}

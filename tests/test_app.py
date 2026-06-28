@@ -17,8 +17,17 @@ class TravelSystemTest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def admin_login(self):
+        return self.client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            follow_redirects=True,
+        )
+
     def test_home_and_admin_pages(self):
         self.assertEqual(self.client.get("/").status_code, 200)
+        self.assertEqual(self.client.get("/admin").status_code, 302)
+        self.admin_login()
         response = self.client.get("/admin")
         self.assertEqual(response.status_code, 200)
         self.assertIn("乌镇", response.get_data(as_text=True))
@@ -54,6 +63,7 @@ class TravelSystemTest(unittest.TestCase):
         self.assertLess(html.index("乌镇"), html.index("哈尔滨冰雪大世界"))
 
     def test_admin_crud(self):
+        self.admin_login()
         add = self.client.post(
             "/admin/add",
             data={
@@ -105,6 +115,36 @@ class TravelSystemTest(unittest.TestCase):
         response = self.client.get("/profile")
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response.headers["Location"])
+
+    def test_normal_user_cannot_access_admin(self):
+        self.register_and_login()
+        response = self.client.get("/admin")
+        self.assertEqual(response.status_code, 302)
+        self.assertNotIn("/admin", response.headers["Location"])
+
+    def test_admin_login_opens_dashboard_with_private_data(self):
+        self.register_and_login()
+        self.client.get("/logout")
+        response = self.client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("管理后台", html)
+        self.assertIn("用户数据", html)
+        self.assertIn("traveler", html)
+
+    def test_anonymous_user_cannot_modify_spots(self):
+        response = self.client.post("/admin/delete/1")
+        self.assertEqual(response.status_code, 302)
+        with app.app_context():
+            app.config["DATABASE"] = str(self.db_path)
+            from app import get_db
+            self.assertIsNotNone(
+                get_db().execute("SELECT id FROM scenic_spot WHERE id = 1").fetchone()
+            )
 
 
 if __name__ == "__main__":

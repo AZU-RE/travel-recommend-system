@@ -1,7 +1,9 @@
 """初始化旅游推荐系统 SQLite 数据库。"""
 
 import sqlite3
+import os
 from pathlib import Path
+from werkzeug.security import generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "travel.db"
@@ -83,6 +85,7 @@ def init_database(db_path=DB_PATH, reset=False):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
             create_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -116,6 +119,32 @@ def init_database(db_path=DB_PATH, reset=False):
         );
         """
     )
+
+    # 增量迁移：旧数据库缺少 role 字段时只增加字段，不重建、不清空数据。
+    user_columns = {
+        row[1] for row in cursor.execute("PRAGMA table_info(app_user)").fetchall()
+    }
+    if "role" not in user_columns:
+        cursor.execute(
+            "ALTER TABLE app_user ADD COLUMN role TEXT NOT NULL DEFAULT 'user'"
+        )
+
+    # 课程设计默认管理员；密码仅保存哈希，可通过环境变量自定义。
+    admin_username = os.getenv("TRAVEL_ADMIN_USERNAME", "admin")
+    admin_password = os.getenv("TRAVEL_ADMIN_PASSWORD", "admin123")
+    admin = cursor.execute(
+        "SELECT id FROM app_user WHERE username = ?", (admin_username,)
+    ).fetchone()
+    if admin is None:
+        cursor.execute(
+            "INSERT INTO app_user (username, password_hash, role) VALUES (?, ?, 'admin')",
+            (admin_username, generate_password_hash(admin_password)),
+        )
+    else:
+        cursor.execute(
+            "UPDATE app_user SET role = 'admin' WHERE username = ?",
+            (admin_username,),
+        )
 
     count = cursor.execute("SELECT COUNT(*) FROM scenic_spot").fetchone()[0]
     if count == 0:

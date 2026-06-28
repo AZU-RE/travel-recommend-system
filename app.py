@@ -59,7 +59,7 @@ def load_logged_in_user():
         g.user = None
     else:
         g.user = get_db().execute(
-            "SELECT id, username, create_time FROM app_user WHERE id = ?",
+            "SELECT id, username, role, create_time FROM app_user WHERE id = ?",
             (user_id,),
         ).fetchone()
 
@@ -71,6 +71,21 @@ def login_required(view):
         if g.user is None:
             flash("请先登录后再使用个人中心功能。", "error")
             return redirect(url_for("login", next=request.path))
+        return view(**kwargs)
+
+    return wrapped_view
+
+
+def admin_required(view):
+    """限制只有管理员角色才能访问的后台功能。"""
+    @wraps(view)
+    def wrapped_view(**kwargs):
+        if g.user is None:
+            flash("请先登录管理员账号。", "error")
+            return redirect(url_for("login", next=request.path))
+        if g.user["role"] != "admin":
+            flash("当前账号没有管理员权限。", "error")
+            return redirect(url_for("profile"))
         return view(**kwargs)
 
     return wrapped_view
@@ -192,7 +207,9 @@ def login():
             session["user_id"] = user["id"]
             target = request.args.get("next", "")
             flash("登录成功。", "success")
-            return redirect(target if target.startswith("/") else url_for("profile"))
+            if target.startswith("/"):
+                return redirect(target)
+            return redirect(url_for("admin") if user["role"] == "admin" else url_for("profile"))
     return render_template("login.html", mode="login")
 
 
@@ -418,12 +435,54 @@ def clear_history():
 
 
 @app.route("/admin")
+@admin_required
 def admin():
-    spots = get_db().execute("SELECT * FROM scenic_spot ORDER BY id DESC").fetchall()
-    return render_template("admin.html", spots=spots, **option_context())
+    db = get_db()
+    spots = db.execute("SELECT * FROM scenic_spot ORDER BY id DESC").fetchall()
+    stats = {
+        "spots": db.execute("SELECT COUNT(*) FROM scenic_spot").fetchone()[0],
+        "users": db.execute("SELECT COUNT(*) FROM app_user WHERE role = 'user'").fetchone()[0],
+        "comments": db.execute("SELECT COUNT(*) FROM comment").fetchone()[0],
+        "recommendations": db.execute("SELECT COUNT(*) FROM recommendation").fetchone()[0],
+    }
+    users = db.execute(
+        """
+        SELECT u.id, u.username, u.role, u.create_time,
+               COUNT(DISTINCT f.id) AS favorite_count,
+               COUNT(DISTINCT c.id) AS comment_count,
+               COUNT(DISTINCT h.id) AS history_count
+        FROM app_user u
+        LEFT JOIN favorite f ON f.user_id = u.id
+        LEFT JOIN comment c ON c.user_id = u.id
+        LEFT JOIN browsing_history h ON h.user_id = u.id
+        GROUP BY u.id ORDER BY u.id DESC
+        """
+    ).fetchall()
+    recent_comments = db.execute(
+        """
+        SELECT c.id, c.content, c.create_time, u.username, s.name AS spot_name
+        FROM comment c
+        JOIN app_user u ON u.id = c.user_id
+        JOIN scenic_spot s ON s.id = c.spot_id
+        ORDER BY c.id DESC LIMIT 20
+        """
+    ).fetchall()
+    recent_preferences = db.execute(
+        "SELECT * FROM user_preference ORDER BY id DESC LIMIT 10"
+    ).fetchall()
+    return render_template(
+        "admin.html",
+        spots=spots,
+        stats=stats,
+        users=users,
+        recent_comments=recent_comments,
+        recent_preferences=recent_preferences,
+        **option_context(),
+    )
 
 
 @app.post("/admin/add")
+@admin_required
 def admin_add():
     values = spot_values(request.form)
     if not values["name"] or not values["city"]:
@@ -446,6 +505,7 @@ def admin_add():
 
 
 @app.post("/admin/edit/<int:spot_id>")
+@admin_required
 def admin_edit(spot_id):
     values = spot_values(request.form)
     values["id"] = spot_id
@@ -467,11 +527,22 @@ def admin_edit(spot_id):
 
 
 @app.post("/admin/delete/<int:spot_id>")
+@admin_required
 def admin_delete(spot_id):
     db = get_db()
     db.execute("DELETE FROM scenic_spot WHERE id = ?", (spot_id,))
     db.commit()
     flash("景点已删除。", "success")
+    return redirect(url_for("admin"))
+
+
+@app.post("/admin/comment/<int:comment_id>/delete")
+@admin_required
+def admin_delete_comment(comment_id):
+    db = get_db()
+    db.execute("DELETE FROM comment WHERE id = ?", (comment_id,))
+    db.commit()
+    flash("评论已由管理员删除。", "success")
     return redirect(url_for("admin"))
 
 
